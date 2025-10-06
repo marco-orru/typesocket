@@ -1,0 +1,42 @@
+{
+  "name": "@typesocket/client",
+  "version": "0.1.0",
+  "description": "Type-safe WebSocket client with runtime validation, automatic reconnection, message queuing, and heartbeat monitoring",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "keywords": [
+    "websocket",
+    "client",
+    "typesafe",
+    "typescript",
+    "validation",
+    "reconnection",
+    "queue",
+    "heartbeat"
+  ],
+  "author": "Marco Orru",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/typesocket.git",
+    "directory": "packages/client"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

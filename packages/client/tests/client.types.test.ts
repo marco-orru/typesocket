@@ -382,17 +382,17 @@ function testReconnectionConditionalTypes() {
 
 function testHeartbeatConditionalTypes() {
 	// ✓ Heartbeat enabled - must explicitly type the config for strict typing
-	const clientHeartbeatEnabled = new TypeSocketClient<
-		CompleteApi,
-		{ heartbeat: { enabled: true; ping: 'heartbeat-ping'; pong: 'heartbeat-pong'; hasTimestamp: true } }
-	>('ws://localhost:8080', {
-		heartbeat: {
-			enabled: true,
-			ping: 'heartbeat-ping',
-			pong: 'heartbeat-pong',
-			hasTimestamp: true,
+	const clientHeartbeatEnabled = new TypeSocketClient<CompleteApi, { heartbeat: { enabled: true; ping: 'heartbeat-ping'; pong: 'heartbeat-pong'; hasTimestamp: true } }>(
+		'ws://localhost:8080',
+		{
+			heartbeat: {
+				enabled: true,
+				ping: 'heartbeat-ping',
+				pong: 'heartbeat-pong',
+				hasTimestamp: true,
+			},
 		},
-	});
+	);
 
 	// ✓ Heartbeat handlers available
 	clientHeartbeatEnabled.on.heartbeatTimeout(() => {});

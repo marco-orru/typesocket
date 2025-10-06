@@ -580,10 +580,7 @@ class OnHandlers<T extends TypeSocketApi, C extends TypeSocketClientConfig<T> = 
 	 * client2.on.beforeReconnect(...); // TypeScript error
 	 * ```
 	 */
-	public beforeReconnect(
-		this: IsReconnectionEnabled<C> extends true ? this : never,
-		handler: (info: ReconnectAttemptInfo) => void,
-	): TypeSocketClient<T, C> {
+	public beforeReconnect(this: IsReconnectionEnabled<C> extends true ? this : never, handler: (info: ReconnectAttemptInfo) => void): TypeSocketClient<T, C> {
 		this._eventManager.addBeforeReconnectHandler(handler);
 		return this._client;
 	}
@@ -617,10 +614,7 @@ class OnHandlers<T extends TypeSocketApi, C extends TypeSocketClientConfig<T> = 
 	 * client2.on.queueFull(...); // TypeScript error
 	 * ```
 	 */
-	public queueFull(
-		this: IsQueueEnabled<C> extends true ? this : never,
-		handler: (info: QueueFullInfo) => void,
-	): TypeSocketClient<T, C> {
+	public queueFull(this: IsQueueEnabled<C> extends true ? this : never, handler: (info: QueueFullInfo) => void): TypeSocketClient<T, C> {
 		this._eventManager.addQueueFullHandler(handler);
 		return this._client;
 	}
@@ -790,10 +784,7 @@ class OffHandlers<T extends TypeSocketApi, C extends TypeSocketClientConfig<T> =
 	 * @param {(info: ReconnectAttemptInfo) => void} handler - The handler to remove
 	 * @returns {TypeSocketClient<T, C>} The client instance for chaining
 	 */
-	public beforeReconnect(
-		this: IsReconnectionEnabled<C> extends true ? this : never,
-		handler: (info: ReconnectAttemptInfo) => void,
-	): TypeSocketClient<T, C> {
+	public beforeReconnect(this: IsReconnectionEnabled<C> extends true ? this : never, handler: (info: ReconnectAttemptInfo) => void): TypeSocketClient<T, C> {
 		this._eventManager.removeBeforeReconnectHandler(handler);
 		return this._client;
 	}
@@ -849,10 +840,7 @@ class OffHandlers<T extends TypeSocketApi, C extends TypeSocketClientConfig<T> =
 	 * @param {(timestamp?: number, rtt?: number) => void} handler - The handler to remove
 	 * @returns {TypeSocketClient<T, C>} The client instance for chaining
 	 */
-	public pongReceived(
-		this: IsHeartbeatEnabled<C> extends true ? this : never,
-		handler: (timestamp?: number, rtt?: number) => void,
-	): TypeSocketClient<T, C> {
+	public pongReceived(this: IsHeartbeatEnabled<C> extends true ? this : never, handler: (timestamp?: number, rtt?: number) => void): TypeSocketClient<T, C> {
 		this._eventManager.removePongReceivedHandler(handler);
 		return this._client;
 	}
@@ -1261,22 +1249,18 @@ export default class TypeSocketClient<T extends TypeSocketApi, C extends TypeSoc
 
 		this._eventManager = new EventManager<T>();
 
-		const hbConfig = config?.heartbeat;
-		const ping: string | undefined = hbConfig?.ping !== undefined ? String(hbConfig.ping) : undefined;
-		const pong: string | undefined = hbConfig?.pong !== undefined ? String(hbConfig.pong) : undefined;
-		const hasTimestamp: boolean = hbConfig?.hasTimestamp !== undefined ? Boolean(hbConfig.hasTimestamp) : false;
+		// Type-safe heartbeat config - validates at input level
+		const hbConfig: HeartbeatConfig<T> | undefined = config?.heartbeat;
 
-		const heartbeatConfig = {
-			enabled: hbConfig?.enabled ?? false,
-			interval: hbConfig?.interval ?? 30000,
-			timeout: hbConfig?.timeout ?? 5000,
-			ping,
-			pong,
-			hasTimestamp,
-		};
-		
 		this._heartbeatManager = new HeartbeatManager<T>(
-			heartbeatConfig,
+			{
+				enabled: hbConfig?.enabled ?? false,
+				interval: hbConfig?.interval ?? 30000,
+				timeout: hbConfig?.timeout ?? 5000,
+				ping: hbConfig?.ping as string | undefined,
+				pong: hbConfig?.pong as string | undefined,
+				hasTimestamp: (hbConfig?.hasTimestamp ?? false) as boolean,
+			},
 			this._eventManager,
 			() => this._connection,
 			() => this.connectionState,

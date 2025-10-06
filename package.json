@@ -1,7 +1,17 @@
 {
   "name": "typesocket",
+  "version": "0.1.0",
+  "private": true,
   "packageManager": "yarn@4.9.2",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "yarn workspaces foreach -Apt run build",
+    "clean": "yarn workspaces foreach -Apt run clean",
+    "typecheck": "tsc --build"
+  },
   "devDependencies": {
     "@eslint/js": "^9.37.0",
     "eslint": "^9.37.0",
@@ -10,6 +20,7 @@
     "globals": "^16.4.0",
     "prettier": "^3.6.2",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.45.0"
+    "typescript-eslint": "^8.45.0",
+    "zod": "^4.1.12"
   }
 }
