@@ -21,36 +21,36 @@ export enum TypeSocketConnectionState {
  * - Sent only: Can only be sent from client to server
  * - Received only: Can only be received from server to client
  *
- * @typedef {Object} MessageDirectionConfig
+ * @typedef {Object} MessageDirectionApi
  */
-export type MessageDirectionConfig = { duplex: unknown } | { sent: unknown; received?: unknown } | { received: unknown; sent?: unknown };
+export type MessageDirectionApi = { duplex: unknown } | { sent: unknown; received?: unknown } | { received: unknown; sent?: unknown };
 
 /**
  * Configuration for a group of TypeSocket messages, optionally with room support.
  *
- * @typedef {Object} TypeSocketMessageGroupConfig
- * @property {Record<string, MessageDirectionConfig>} messages - Map of message type names to their direction configurations
+ * @typedef {Object} TypeSocketMessageGroupApi
+ * @property {Record<string, MessageDirectionApi>} messages - Map of message type names to their direction configurations
  */
-export type TypeSocketMessageGroupConfig = {
-	messages: Record<string, MessageDirectionConfig>;
+export type TypeSocketMessageGroupApi = {
+	messages: Record<string, MessageDirectionApi>;
 };
 
 /**
  * Main TypeSocket configuration that extends message group configuration with optional heartbeat settings.
  *
- * @typedef {Object} TypeSocketConfig
+ * @typedef {Object} TypeSocketApi
  * @property {Object} [heartbeat] - Optional heartbeat/ping-pong configuration
  * @property {string} heartbeat.ping - Message type identifier for ping messages
  * @property {string} heartbeat.pong - Message type identifier for pong messages
  * @property {boolean} heartbeat.hasTimestamp - Whether heartbeat messages include timestamps for RTT calculation
  */
-export type TypeSocketConfig = {
+export type TypeSocketApi = {
 	heartbeat?: {
 		ping: string;
 		pong: string;
 		hasTimestamp: boolean;
 	};
-} & TypeSocketMessageGroupConfig;
+} & TypeSocketMessageGroupApi;
 
 /**
  * Utility type that extracts all message type names that can be sent from the client.
@@ -59,7 +59,7 @@ export type TypeSocketConfig = {
  * @template T - The TypeSocket configuration
  * @typedef {string} ExtractSendableMessageTypes
  */
-export type ExtractSendableMessageTypes<T extends TypeSocketConfig> = {
+export type ExtractSendableMessageTypes<T extends TypeSocketApi> = {
 	[K in keyof T['messages']]: T['messages'][K] extends { duplex: unknown } ? K : T['messages'][K] extends { sent: unknown } ? K : never;
 }[keyof T['messages']];
 
@@ -70,7 +70,7 @@ export type ExtractSendableMessageTypes<T extends TypeSocketConfig> = {
  * @template T - The TypeSocket configuration
  * @typedef {string} ExtractReceivableMessageTypes
  */
-export type ExtractReceivableMessageTypes<T extends TypeSocketConfig> = {
+export type ExtractReceivableMessageTypes<T extends TypeSocketApi> = {
 	[K in keyof T['messages']]: T['messages'][K] extends { duplex: unknown } ? K : T['messages'][K] extends { received: unknown } ? K : never;
 }[keyof T['messages']];
 
@@ -83,7 +83,7 @@ export type ExtractReceivableMessageTypes<T extends TypeSocketConfig> = {
  * @template K - The message type name (must be sendable)
  * @typedef ExtractSentPayloadType
  */
-export type ExtractSentPayloadType<T extends TypeSocketConfig, K extends ExtractSendableMessageTypes<T>> = T['messages'][K] extends { duplex: infer U }
+export type ExtractSentPayloadType<T extends TypeSocketApi, K extends ExtractSendableMessageTypes<T>> = T['messages'][K] extends { duplex: infer U }
 	? U
 	: T['messages'][K] extends { sent: infer U }
 		? U
@@ -98,7 +98,7 @@ export type ExtractSentPayloadType<T extends TypeSocketConfig, K extends Extract
  * @template K - The message type name (must be receivable)
  * @typedef ExtractReceivedPayloadType
  */
-export type ExtractReceivedPayloadType<T extends TypeSocketConfig, K extends ExtractReceivableMessageTypes<T>> = T['messages'][K] extends { duplex: infer U }
+export type ExtractReceivedPayloadType<T extends TypeSocketApi, K extends ExtractReceivableMessageTypes<T>> = T['messages'][K] extends { duplex: infer U }
 	? U
 	: T['messages'][K] extends { received: infer U }
 		? U
@@ -180,29 +180,37 @@ export interface DisconnectInfo {
 /**
  * Configuration for heartbeat/ping-pong mechanism to detect connection health.
  *
+ * @template T - The TypeSocket API configuration
  * @interface HeartbeatConfig
  * @property {boolean} [enabled=false] - Whether heartbeat is enabled
  * @property {number} [interval=30000] - Interval in milliseconds between heartbeat pings
  * @property {number} [timeout=5000] - Timeout in milliseconds to wait for pong response
+ * @property {string} [ping] - Message type identifier for ping messages (inferred from T['heartbeat']['ping'])
+ * @property {string} [pong] - Message type identifier for pong messages (inferred from T['heartbeat']['pong'])
+ * @property {boolean} [hasTimestamp=false] - Whether heartbeat messages include timestamps (inferred from T['heartbeat']['hasTimestamp'])
  */
-export interface HeartbeatConfig {
+export interface HeartbeatConfig<T extends TypeSocketApi> {
 	enabled?: boolean;
 	interval?: number;
 	timeout?: number;
+	ping?: T['heartbeat'] extends { ping: infer P } ? P : string;
+	pong?: T['heartbeat'] extends { pong: infer P } ? P : string;
+	hasTimestamp?: T['heartbeat'] extends { hasTimestamp: infer H } ? H : boolean;
 }
 
 /**
  * Complete configuration object for TypeSocketClient behavior.
  *
+ * @template T - The TypeSocket API configuration
  * @interface TypeSocketClientConfig
  * @property {ReconnectionConfig} [reconnection] - Reconnection behavior configuration
  * @property {MessageQueueConfig} [messageQueue] - Message queue configuration
- * @property {HeartbeatConfig} [heartbeat] - Heartbeat/ping-pong configuration
+ * @property {HeartbeatConfig<T>} [heartbeat] - Heartbeat/ping-pong configuration
  */
-export interface TypeSocketClientConfig {
+export interface TypeSocketClientConfig<T extends TypeSocketApi> {
 	reconnection?: ReconnectionConfig;
 	messageQueue?: MessageQueueConfig;
-	heartbeat?: HeartbeatConfig;
+	heartbeat?: HeartbeatConfig<T>;
 }
 
 /**

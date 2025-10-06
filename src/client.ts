@@ -14,7 +14,7 @@ import {
 	type ReconnectAttemptInfo,
 	type ReconnectionConfig,
 	type TypeSocketClientConfig,
-	type TypeSocketConfig,
+	type TypeSocketApi,
 	type TypeSocketError,
 } from './types.js';
 
@@ -25,7 +25,7 @@ import {
  * @template T - The TypeSocket configuration
  * @internal
  */
-type ValidMessage<T extends TypeSocketConfig> = {
+type ValidMessage<T extends TypeSocketApi> = {
 	[K in ExtractReceivableMessageTypes<T>]: { type: K; data: ExtractReceivedPayloadType<T, K> };
 }[ExtractReceivableMessageTypes<T>];
 
@@ -38,7 +38,7 @@ type ValidMessage<T extends TypeSocketConfig> = {
  * @throws {Error} If the message is missing type or data fields
  * @internal
  */
-function assertIsValidMessage<T extends TypeSocketConfig>(message: object): asserts message is ValidMessage<T> {
+function assertIsValidMessage<T extends TypeSocketApi>(message: object): asserts message is ValidMessage<T> {
 	if (!('type' in message) || typeof message.type !== 'string') {
 		throw new Error('Invalid message: missing or invalid type field');
 	}
@@ -54,18 +54,17 @@ function assertIsValidMessage<T extends TypeSocketConfig>(message: object): asse
  * @template T - The TypeSocket configuration
  * @internal
  */
-type MessageHandlerSets<T extends TypeSocketConfig> = {
+type MessageHandlerSets<T extends TypeSocketApi> = {
 	[K in ExtractReceivableMessageTypes<T>]: Set<(data: ExtractReceivedPayloadType<T, K>) => void>;
 };
 
 /**
  * Internal type for pong message payload.
- * Conditionally includes timestamp if configured in the TypeSocket heartbeat settings.
+ * Conditionally includes timestamp if configured in the heartbeat config settings.
  *
- * @template T - The TypeSocket configuration
  * @internal
  */
-type PongPayload<T extends TypeSocketConfig> = T['heartbeat'] extends { hasTimestamp: true } ? { timestamp: number } : {};
+type PongPayload = { timestamp?: number };
 
 /**
  * Internal event manager that handles registration and emission of all TypeSocket events.
@@ -74,7 +73,7 @@ type PongPayload<T extends TypeSocketConfig> = T['heartbeat'] extends { hasTimes
  * @template T - The TypeSocket configuration
  * @internal
  */
-class EventManager<T extends TypeSocketConfig> {
+class EventManager<T extends TypeSocketApi> {
 	private readonly _connectedHandlers = new Set<() => void>();
 	private readonly _disconnectedHandlers = new Set<(info: DisconnectInfo) => void>();
 	private readonly _errorHandlers = new Set<(error: TypeSocketError) => void>();
@@ -341,7 +340,7 @@ class EventManager<T extends TypeSocketConfig> {
  * @template T - The TypeSocket configuration
  * @internal
  */
-class HeartbeatManager<T extends TypeSocketConfig> {
+class HeartbeatManager<T extends TypeSocketApi> {
 	private _heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 	private _heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
 	private _lastPongReceived: Date | null = null;
@@ -349,16 +348,21 @@ class HeartbeatManager<T extends TypeSocketConfig> {
 
 	/**
 	 * Creates a new HeartbeatManager instance.
-	 * @param {Required<HeartbeatConfig>} _config - Heartbeat configuration with all required fields
-	 * @param {T} _socketConfig - TypeSocket configuration
+	 * @param _config - Heartbeat configuration
 	 * @param {EventManager<T>} _eventManager - Event manager for emitting heartbeat events
 	 * @param {() => WebSocket | null} _getConnection - Function to get the current WebSocket connection
 	 * @param {() => TypeSocketConnectionState} _getConnectionState - Function to get the current connection state
 	 * @param {() => void} _closeConnection - Function to close the connection on timeout
 	 */
 	constructor(
-		private readonly _config: Required<HeartbeatConfig>,
-		private readonly _socketConfig: T,
+		private readonly _config: {
+			enabled: boolean;
+			interval: number;
+			timeout: number;
+			ping: string | undefined;
+			pong: string | undefined;
+			hasTimestamp: boolean;
+		},
 		private readonly _eventManager: EventManager<T>,
 		private readonly _getConnection: () => WebSocket | null,
 		private readonly _getConnectionState: () => TypeSocketConnectionState,
@@ -370,7 +374,7 @@ class HeartbeatManager<T extends TypeSocketConfig> {
 	 * Automatically stops any existing heartbeat before starting a new one.
 	 */
 	public start(): void {
-		if (!this._config.enabled || !this._socketConfig.heartbeat) return;
+		if (!this._config.enabled || !this._config.ping || !this._config.pong) return;
 
 		this.stop();
 
@@ -399,15 +403,15 @@ class HeartbeatManager<T extends TypeSocketConfig> {
 	 * On send error, immediately triggers timeout handling.
 	 */
 	public sendHeartbeat(): void {
-		if (!this._socketConfig.heartbeat || this._getConnectionState() !== TypeSocketConnectionState.CONNECTED) return;
+		if (!this._config.ping || !this._config.pong || this._getConnectionState() !== TypeSocketConnectionState.CONNECTED) return;
 
-		const timestamp = this._socketConfig.heartbeat.hasTimestamp ? Date.now() : undefined;
+		const timestamp = this._config.hasTimestamp ? Date.now() : undefined;
 		const pingData = timestamp !== undefined ? { timestamp } : {};
 
 		try {
 			this._getConnection()?.send(
 				JSON.stringify({
-					type: this._socketConfig.heartbeat.ping,
+					type: this._config.ping,
 					data: pingData,
 				}),
 			);
@@ -425,10 +429,10 @@ class HeartbeatManager<T extends TypeSocketConfig> {
 	/**
 	 * Handles a received pong response.
 	 * Clears the timeout, calculates round-trip time if timestamps are enabled, and emits the pongReceived event.
-	 * @param {PongPayload<T>} data - The pong payload data
+	 * @param {PongPayload} data - The pong payload data
 	 */
-	public handlePong(data: PongPayload<T>): void {
-		if (!this._socketConfig.heartbeat) return;
+	public handlePong(data: PongPayload): void {
+		if (!this._config.ping || !this._config.pong) return;
 
 		if (this._heartbeatTimeout) {
 			clearTimeout(this._heartbeatTimeout);
@@ -438,7 +442,7 @@ class HeartbeatManager<T extends TypeSocketConfig> {
 		let timestamp: number | undefined;
 		let rtt: number | undefined;
 
-		if (this._socketConfig.heartbeat.hasTimestamp && 'timestamp' in data) {
+		if (this._config.hasTimestamp && data.timestamp !== undefined) {
 			timestamp = data.timestamp;
 			rtt = Date.now() - timestamp;
 			this._lastRtt = rtt;
@@ -492,7 +496,7 @@ class HeartbeatManager<T extends TypeSocketConfig> {
  * @template C - The client configuration (optional)
  * @internal
  */
-class OnHandlers<T extends TypeSocketConfig, C extends TypeSocketClientConfig | undefined = undefined> {
+class OnHandlers<T extends TypeSocketApi, C extends TypeSocketClientConfig<T> = TypeSocketClientConfig<T>> {
 	/**
 	 * Creates a new OnHandlers instance.
 	 * @param {EventManager<T>} _eventManager - Event manager for registering handlers
@@ -547,57 +551,172 @@ class OnHandlers<T extends TypeSocketConfig, C extends TypeSocketClientConfig | 
 
 	/**
 	 * Registers a handler for the 'beforeReconnect' event.
-	 * Only available if reconnection is enabled in the client configuration.
+	 *
+	 * **Availability**: This method is only available when reconnection is enabled in the client configuration.
+	 * When reconnection is disabled (`reconnection: { enabled: false }`), this method will not be callable
+	 * at compile-time, ensuring type safety.
+	 *
+	 * **Why**: If reconnection is disabled, the beforeReconnect event will never be emitted, making it
+	 * unnecessary to register handlers for it. TypeScript enforces this at compile-time to prevent
+	 * registering handlers that will never be called.
+	 *
 	 * @param {(info: ReconnectAttemptInfo) => void} handler - The handler to call before reconnection attempts
-	 * @returns {TypeSocketClient<T, C> | never} The client instance for chaining, or never if reconnection is disabled
+	 * @returns {TypeSocketClient<T, C>} The client instance for chaining
+	 *
+	 * @example
+	 * ```typescript
+	 * // ✓ Available when reconnection is enabled
+	 * const client = new TypeSocketClient<MyApi, { reconnection: { enabled: true } }>(url, {
+	 *   reconnection: { enabled: true }
+	 * });
+	 * client.on.beforeReconnect((info) => {
+	 *   console.log(`Reconnecting (attempt ${info.attempt}/${info.maxRetries})`);
+	 * });
+	 *
+	 * // ✗ Not available when reconnection is disabled
+	 * const client2 = new TypeSocketClient<MyApi, { reconnection: { enabled: false } }>(url, {
+	 *   reconnection: { enabled: false }
+	 * });
+	 * client2.on.beforeReconnect(...); // TypeScript error
+	 * ```
 	 */
-	public beforeReconnect(handler: (info: ReconnectAttemptInfo) => void): IsReconnectionEnabled<C> extends true ? TypeSocketClient<T, C> : never {
+	public beforeReconnect(
+		this: IsReconnectionEnabled<C> extends true ? this : never,
+		handler: (info: ReconnectAttemptInfo) => void,
+	): TypeSocketClient<T, C> {
 		this._eventManager.addBeforeReconnectHandler(handler);
-		return this._client as IsReconnectionEnabled<C> extends true ? TypeSocketClient<T, C> : never;
+		return this._client;
 	}
 
 	/**
 	 * Registers a handler for the 'queueFull' event.
-	 * Only available if message queue is enabled in the client configuration.
+	 *
+	 * **Availability**: This method is only available when the message queue is enabled in the client configuration.
+	 * When the queue is disabled (`messageQueue: { enabled: false }`), this method will not be callable
+	 * at compile-time, ensuring type safety.
+	 *
+	 * **Why**: If the message queue is disabled, the queueFull event will never be emitted since messages
+	 * are not queued. TypeScript enforces this at compile-time to prevent registering handlers that will
+	 * never be called.
+	 *
 	 * @param {(info: QueueFullInfo) => void} handler - The handler to call when the queue becomes full
-	 * @returns {TypeSocketClient<T, C> | never} The client instance for chaining, or never if queue is disabled
+	 * @returns {TypeSocketClient<T, C>} The client instance for chaining
+	 *
+	 * @example
+	 * ```typescript
+	 * // ✓ Available when queue is enabled (default)
+	 * const client = new TypeSocketClient<MyApi>(url);
+	 * client.on.queueFull((info) => {
+	 *   console.log(`Queue full: ${info.currentSize}/${info.maxSize}`);
+	 * });
+	 *
+	 * // ✗ Not available when queue is disabled
+	 * const client2 = new TypeSocketClient<MyApi, { messageQueue: { enabled: false } }>(url, {
+	 *   messageQueue: { enabled: false }
+	 * });
+	 * client2.on.queueFull(...); // TypeScript error
+	 * ```
 	 */
-	public queueFull(handler: (info: QueueFullInfo) => void): IsQueueEnabled<C> extends true ? TypeSocketClient<T, C> : never {
+	public queueFull(
+		this: IsQueueEnabled<C> extends true ? this : never,
+		handler: (info: QueueFullInfo) => void,
+	): TypeSocketClient<T, C> {
 		this._eventManager.addQueueFullHandler(handler);
-		return this._client as IsQueueEnabled<C> extends true ? TypeSocketClient<T, C> : never;
+		return this._client;
 	}
 
 	/**
 	 * Registers a handler for the 'heartbeatTimeout' event.
-	 * Only available if heartbeat is enabled in the client configuration.
+	 *
+	 * **Availability**: This method is only available when heartbeat is enabled in the client configuration.
+	 * When heartbeat is disabled (`heartbeat: { enabled: false }`), this method will not be callable
+	 * at compile-time, ensuring type safety.
+	 *
+	 * **Why**: If heartbeat is disabled, the heartbeatTimeout event will never be emitted since ping/pong
+	 * messages are not sent. TypeScript enforces this at compile-time to prevent registering handlers
+	 * that will never be called.
+	 *
 	 * @param {() => void} handler - The handler to call when a heartbeat timeout occurs
-	 * @returns {TypeSocketClient<T, C> | never} The client instance for chaining, or never if heartbeat is disabled
+	 * @returns {TypeSocketClient<T, C>} The client instance for chaining
+	 *
+	 * @example
+	 * ```typescript
+	 * // ✓ Available when heartbeat is enabled
+	 * const client = new TypeSocketClient<MyApi, { heartbeat: { enabled: true; ping: 'ping'; pong: 'pong' } }>(url, {
+	 *   heartbeat: { enabled: true, ping: 'ping', pong: 'pong' }
+	 * });
+	 * client.on.heartbeatTimeout(() => {
+	 *   console.log('Connection lost - no pong received');
+	 * });
+	 *
+	 * // ✗ Not available when heartbeat is disabled
+	 * const client2 = new TypeSocketClient<MyApi>(url); // heartbeat disabled by default
+	 * client2.on.heartbeatTimeout(...); // TypeScript error
+	 * ```
 	 */
-	public heartbeatTimeout(handler: () => void): IsHeartbeatEnabled<C> extends true ? TypeSocketClient<T, C> : never {
+	public heartbeatTimeout(this: IsHeartbeatEnabled<C> extends true ? this : never, handler: () => void): TypeSocketClient<T, C> {
 		this._eventManager.addHeartbeatTimeoutHandler(handler);
-		return this._client as IsHeartbeatEnabled<C> extends true ? TypeSocketClient<T, C> : never;
+		return this._client;
 	}
 
 	/**
 	 * Registers a handler for the 'pingSent' event.
-	 * Only available if heartbeat is enabled in the client configuration.
-	 * @param {(timestamp?: number) => void} handler - The handler to call when a ping is sent
-	 * @returns {TypeSocketClient<T, C> | never} The client instance for chaining, or never if heartbeat is disabled
+	 *
+	 * **Availability**: This method is only available when heartbeat is enabled in the client configuration.
+	 * When heartbeat is disabled (`heartbeat: { enabled: false }`), this method will not be callable
+	 * at compile-time, ensuring type safety.
+	 *
+	 * **Why**: If heartbeat is disabled, ping messages are never sent, making this event irrelevant.
+	 * TypeScript enforces this at compile-time to prevent registering handlers that will never be called.
+	 *
+	 * @param {(timestamp?: number) => void} handler - The handler to call when a ping is sent.
+	 *                                                   If `hasTimestamp` is true, timestamp will be provided.
+	 * @returns {TypeSocketClient<T, C>} The client instance for chaining
+	 *
+	 * @example
+	 * ```typescript
+	 * // ✓ Available when heartbeat is enabled
+	 * const client = new TypeSocketClient<MyApi, { heartbeat: { enabled: true; ping: 'ping'; pong: 'pong'; hasTimestamp: true } }>(url, {
+	 *   heartbeat: { enabled: true, ping: 'ping', pong: 'pong', hasTimestamp: true }
+	 * });
+	 * client.on.pingSent((timestamp) => {
+	 *   console.log(`Ping sent at ${timestamp}`);
+	 * });
+	 * ```
 	 */
-	public pingSent(handler: (timestamp?: number) => void): IsHeartbeatEnabled<C> extends true ? TypeSocketClient<T, C> : never {
+	public pingSent(this: IsHeartbeatEnabled<C> extends true ? this : never, handler: (timestamp?: number) => void): TypeSocketClient<T, C> {
 		this._eventManager.addPingSentHandler(handler);
-		return this._client as IsHeartbeatEnabled<C> extends true ? TypeSocketClient<T, C> : never;
+		return this._client;
 	}
 
 	/**
 	 * Registers a handler for the 'pongReceived' event.
-	 * Only available if heartbeat is enabled in the client configuration.
-	 * @param {(timestamp?: number, rtt?: number) => void} handler - The handler to call when a pong is received
-	 * @returns {TypeSocketClient<T, C> | never} The client instance for chaining, or never if heartbeat is disabled
+	 *
+	 * **Availability**: This method is only available when heartbeat is enabled in the client configuration.
+	 * When heartbeat is disabled (`heartbeat: { enabled: false }`), this method will not be callable
+	 * at compile-time, ensuring type safety.
+	 *
+	 * **Why**: If heartbeat is disabled, pong messages are never received, making this event irrelevant.
+	 * TypeScript enforces this at compile-time to prevent registering handlers that will never be called.
+	 *
+	 * @param {(timestamp?: number, rtt?: number) => void} handler - The handler to call when a pong is received.
+	 *                                                                If `hasTimestamp` is true, timestamp and RTT will be provided.
+	 * @returns {TypeSocketClient<T, C>} The client instance for chaining
+	 *
+	 * @example
+	 * ```typescript
+	 * // ✓ Available when heartbeat is enabled with timestamps
+	 * const client = new TypeSocketClient<MyApi, { heartbeat: { enabled: true; ping: 'ping'; pong: 'pong'; hasTimestamp: true } }>(url, {
+	 *   heartbeat: { enabled: true, ping: 'ping', pong: 'pong', hasTimestamp: true }
+	 * });
+	 * client.on.pongReceived((timestamp, rtt) => {
+	 *   console.log(`Pong received! RTT: ${rtt}ms`);
+	 * });
+	 * ```
 	 */
-	public pongReceived(handler: (timestamp?: number, rtt?: number) => void): IsHeartbeatEnabled<C> extends true ? TypeSocketClient<T, C> : never {
+	public pongReceived(this: IsHeartbeatEnabled<C> extends true ? this : never, handler: (timestamp?: number, rtt?: number) => void): TypeSocketClient<T, C> {
 		this._eventManager.addPongReceivedHandler(handler);
-		return this._client as IsHeartbeatEnabled<C> extends true ? TypeSocketClient<T, C> : never;
+		return this._client;
 	}
 }
 
@@ -609,7 +728,7 @@ class OnHandlers<T extends TypeSocketConfig, C extends TypeSocketClientConfig | 
  * @template C - The client configuration (optional)
  * @internal
  */
-class OffHandlers<T extends TypeSocketConfig, C extends TypeSocketClientConfig | undefined = undefined> {
+class OffHandlers<T extends TypeSocketApi, C extends TypeSocketClientConfig<T> = TypeSocketClientConfig<T>> {
 	/**
 	 * Creates a new OffHandlers instance.
 	 * @param {EventManager<T>} _eventManager - Event manager for unregistering handlers
@@ -664,57 +783,78 @@ class OffHandlers<T extends TypeSocketConfig, C extends TypeSocketClientConfig |
 
 	/**
 	 * Unregisters a handler for the 'beforeReconnect' event.
-	 * Only available if reconnection is enabled in the client configuration.
+	 *
+	 * **Availability**: This method is only available when reconnection is enabled in the client configuration.
+	 * When reconnection is disabled, this method will not be callable at compile-time.
+	 *
 	 * @param {(info: ReconnectAttemptInfo) => void} handler - The handler to remove
-	 * @returns {TypeSocketClient<T, C> | never} The client instance for chaining, or never if reconnection is disabled
+	 * @returns {TypeSocketClient<T, C>} The client instance for chaining
 	 */
-	public beforeReconnect(handler: (info: ReconnectAttemptInfo) => void): IsReconnectionEnabled<C> extends true ? TypeSocketClient<T, C> : never {
+	public beforeReconnect(
+		this: IsReconnectionEnabled<C> extends true ? this : never,
+		handler: (info: ReconnectAttemptInfo) => void,
+	): TypeSocketClient<T, C> {
 		this._eventManager.removeBeforeReconnectHandler(handler);
-		return this._client as IsReconnectionEnabled<C> extends true ? TypeSocketClient<T, C> : never;
+		return this._client;
 	}
 
 	/**
 	 * Unregisters a handler for the 'queueFull' event.
-	 * Only available if message queue is enabled in the client configuration.
+	 *
+	 * **Availability**: This method is only available when the message queue is enabled in the client configuration.
+	 * When the queue is disabled, this method will not be callable at compile-time.
+	 *
 	 * @param {(info: QueueFullInfo) => void} handler - The handler to remove
-	 * @returns {TypeSocketClient<T, C> | never} The client instance for chaining, or never if queue is disabled
+	 * @returns {TypeSocketClient<T, C>} The client instance for chaining
 	 */
-	public queueFull(handler: (info: QueueFullInfo) => void): IsQueueEnabled<C> extends true ? TypeSocketClient<T, C> : never {
+	public queueFull(this: IsQueueEnabled<C> extends true ? this : never, handler: (info: QueueFullInfo) => void): TypeSocketClient<T, C> {
 		this._eventManager.removeQueueFullHandler(handler);
-		return this._client as IsQueueEnabled<C> extends true ? TypeSocketClient<T, C> : never;
+		return this._client;
 	}
 
 	/**
 	 * Unregisters a handler for the 'heartbeatTimeout' event.
-	 * Only available if heartbeat is enabled in the client configuration.
+	 *
+	 * **Availability**: This method is only available when heartbeat is enabled in the client configuration.
+	 * When heartbeat is disabled, this method will not be callable at compile-time.
+	 *
 	 * @param {() => void} handler - The handler to remove
-	 * @returns {TypeSocketClient<T, C> | never} The client instance for chaining, or never if heartbeat is disabled
+	 * @returns {TypeSocketClient<T, C>} The client instance for chaining
 	 */
-	public heartbeatTimeout(handler: () => void): IsHeartbeatEnabled<C> extends true ? TypeSocketClient<T, C> : never {
+	public heartbeatTimeout(this: IsHeartbeatEnabled<C> extends true ? this : never, handler: () => void): TypeSocketClient<T, C> {
 		this._eventManager.removeHeartbeatTimeoutHandler(handler);
-		return this._client as IsHeartbeatEnabled<C> extends true ? TypeSocketClient<T, C> : never;
+		return this._client;
 	}
 
 	/**
 	 * Unregisters a handler for the 'pingSent' event.
-	 * Only available if heartbeat is enabled in the client configuration.
+	 *
+	 * **Availability**: This method is only available when heartbeat is enabled in the client configuration.
+	 * When heartbeat is disabled, this method will not be callable at compile-time.
+	 *
 	 * @param {(timestamp?: number) => void} handler - The handler to remove
-	 * @returns {TypeSocketClient<T, C> | never} The client instance for chaining, or never if heartbeat is disabled
+	 * @returns {TypeSocketClient<T, C>} The client instance for chaining
 	 */
-	public pingSent(handler: (timestamp?: number) => void): IsHeartbeatEnabled<C> extends true ? TypeSocketClient<T, C> : never {
+	public pingSent(this: IsHeartbeatEnabled<C> extends true ? this : never, handler: (timestamp?: number) => void): TypeSocketClient<T, C> {
 		this._eventManager.removePingSentHandler(handler);
-		return this._client as IsHeartbeatEnabled<C> extends true ? TypeSocketClient<T, C> : never;
+		return this._client;
 	}
 
 	/**
 	 * Unregisters a handler for the 'pongReceived' event.
-	 * Only available if heartbeat is enabled in the client configuration.
+	 *
+	 * **Availability**: This method is only available when heartbeat is enabled in the client configuration.
+	 * When heartbeat is disabled, this method will not be callable at compile-time.
+	 *
 	 * @param {(timestamp?: number, rtt?: number) => void} handler - The handler to remove
-	 * @returns {TypeSocketClient<T, C> | never} The client instance for chaining, or never if heartbeat is disabled
+	 * @returns {TypeSocketClient<T, C>} The client instance for chaining
 	 */
-	public pongReceived(handler: (timestamp?: number, rtt?: number) => void): IsHeartbeatEnabled<C> extends true ? TypeSocketClient<T, C> : never {
+	public pongReceived(
+		this: IsHeartbeatEnabled<C> extends true ? this : never,
+		handler: (timestamp?: number, rtt?: number) => void,
+	): TypeSocketClient<T, C> {
 		this._eventManager.removePongReceivedHandler(handler);
-		return this._client as IsHeartbeatEnabled<C> extends true ? TypeSocketClient<T, C> : never;
+		return this._client;
 	}
 }
 
@@ -725,7 +865,7 @@ class OffHandlers<T extends TypeSocketConfig, C extends TypeSocketClientConfig |
  * @template T - The TypeSocket configuration
  * @internal
  */
-class QueueManager<T extends TypeSocketConfig> {
+class QueueManager<T extends TypeSocketApi> {
 	private _messageQueue: Array<{ type: ExtractSendableMessageTypes<T>; data: unknown }> = [];
 
 	/**
@@ -839,7 +979,7 @@ class QueueManager<T extends TypeSocketConfig> {
  * @template T - The TypeSocket configuration
  * @internal
  */
-class MetricsManager<T extends TypeSocketConfig> {
+class MetricsManager<T extends TypeSocketApi> {
 	/**
 	 * Creates a new MetricsManager instance.
 	 * @param {() => TypeSocketConnectionState} _getConnectionState - Function to get the current connection state
@@ -910,7 +1050,7 @@ class MetricsManager<T extends TypeSocketConfig> {
  * @template T - The TypeSocket configuration
  * @internal
  */
-class ReconnectionManager<T extends TypeSocketConfig> {
+class ReconnectionManager<T extends TypeSocketApi> {
 	private _reconnectionAttempts = 0;
 	private _reconnectionTimeout: ReturnType<typeof setTimeout> | null = null;
 	private _intentionalDisconnect = false;
@@ -1032,22 +1172,23 @@ class ReconnectionManager<T extends TypeSocketConfig> {
  *
  * @example
  * ```typescript
- * const socketConfig = {
+ * interface MySocketApi extends TypeSocketApi {
  *   messages: {
- *     greeting: { duplex: { text: string } },
- *     notification: { received: { message: string } }
- *   }
- * };
+ *     greeting: { duplex: { text: string } };
+ *     notification: { received: { message: string } };
+ *   };
+ * }
  *
- * const client = new TypeSocketClient('ws://localhost:8080', socketConfig);
+ * const client = new TypeSocketClient<MySocketApi>('ws://localhost:8080', {
+ *   heartbeat: { enabled: true, ping: 'ping', pong: 'pong', hasTimestamp: true }
+ * });
  * client.on.connected(() => console.log('Connected!'));
  * client.on.message('notification', (data) => console.log(data.message));
  * client.connect();
  * ```
  */
-export default class TypeSocketClient<T extends TypeSocketConfig, const C extends TypeSocketClientConfig | undefined = undefined> {
+export default class TypeSocketClient<T extends TypeSocketApi, C extends TypeSocketClientConfig<T> = TypeSocketClientConfig<T>> {
 	private readonly _url: URL;
-	private readonly _socketConfig: T;
 	private readonly _eventManager: EventManager<T>;
 	private readonly _heartbeatManager: HeartbeatManager<T>;
 	private readonly _queueManager: QueueManager<T>;
@@ -1059,34 +1200,83 @@ export default class TypeSocketClient<T extends TypeSocketConfig, const C extend
 	public readonly on: OnHandlers<T, C>;
 	/** Fluent API for unregistering event handlers */
 	public readonly off: OffHandlers<T, C>;
-	/** Queue manager (only available if queue is enabled) */
-	public readonly queue: IsQueueEnabled<C> extends true ? QueueManager<T> : never;
-	/** Metrics for monitoring client state */
-	public readonly metrics: MetricsManager<T>;
-	/** Reconnection manager (only available if reconnection is enabled) */
-	public readonly reconnection: IsReconnectionEnabled<C> extends true ? ReconnectionManager<T> : never;
 
 	/**
-	 * Creates a new TypeSocketClient instance.
+	 * Queue manager for inspecting and controlling the message queue.
 	 *
-	 * @param {URL | string} url - The WebSocket server URL
-	 * @param {T} socketConfig - TypeSocket configuration defining message types
-	 * @param {C} [config] - Optional client configuration for reconnection, queue, and heartbeat
+	 * **Availability**: Only accessible when the message queue is enabled (default).
+	 * When disabled (`messageQueue: { enabled: false }`), accessing this property or its methods
+	 * will result in compile-time TypeScript errors.
+	 *
+	 * **Why**: When the queue is disabled, messages are not queued, making queue operations
+	 * meaningless. TypeScript prevents accessing this property to ensure type safety.
+	 *
+	 * @example
+	 * ```typescript
+	 * // ✓ Available when queue is enabled (default)
+	 * const client = new TypeSocketClient<MyApi>(url);
+	 * console.log(client.queue.size); // OK
+	 * client.queue.clear(); // OK
+	 *
+	 * // ✗ Not available when queue is disabled
+	 * const client2 = new TypeSocketClient<MyApi, { messageQueue: { enabled: false } }>(url, {
+	 *   messageQueue: { enabled: false }
+	 * });
+	 * client2.queue.size; // TypeScript error: Property 'size' does not exist on type 'never'
+	 * ```
 	 */
-	public constructor(url: URL | string, socketConfig: T, config?: C) {
+	public readonly queue: IsQueueEnabled<C> extends true ? QueueManager<T> : never;
+
+	/** Metrics for monitoring client state */
+	public readonly metrics: MetricsManager<T>;
+
+	/**
+	 * Reconnection manager for controlling automatic reconnection behavior.
+	 *
+	 * **Availability**: Only accessible when reconnection is enabled (default).
+	 * When disabled (`reconnection: { enabled: false }`), accessing this property or its methods
+	 * will result in compile-time TypeScript errors.
+	 *
+	 * **Why**: When reconnection is disabled, reconnection operations are meaningless.
+	 * TypeScript prevents accessing this property to ensure type safety.
+	 *
+	 * @example
+	 * ```typescript
+	 * // ✓ Available when reconnection is enabled (default)
+	 * const client = new TypeSocketClient<MyApi>(url);
+	 * console.log(client.reconnection.attempts); // OK
+	 * client.reconnection.disable(); // OK
+	 *
+	 * // ✗ Not available when reconnection is disabled
+	 * const client2 = new TypeSocketClient<MyApi, { reconnection: { enabled: false } }>(url, {
+	 *   reconnection: { enabled: false }
+	 * });
+	 * client2.reconnection.attempts; // TypeScript error: Property 'attempts' does not exist on type 'never'
+	 * ```
+	 */
+	public readonly reconnection: IsReconnectionEnabled<C> extends true ? ReconnectionManager<T> : never;
+
+	public constructor(url: URL | string, config?: C) {
 		this._url = typeof url === 'string' ? new URL(url) : url;
-		this._socketConfig = socketConfig;
 
 		this._eventManager = new EventManager<T>();
 
-		const heartbeatConfig: Required<HeartbeatConfig> = {
-			enabled: config?.heartbeat?.enabled ?? false,
-			interval: config?.heartbeat?.interval ?? 30000,
-			timeout: config?.heartbeat?.timeout ?? 5000,
+		const hbConfig = config?.heartbeat;
+		const ping: string | undefined = hbConfig?.ping !== undefined ? String(hbConfig.ping) : undefined;
+		const pong: string | undefined = hbConfig?.pong !== undefined ? String(hbConfig.pong) : undefined;
+		const hasTimestamp: boolean = hbConfig?.hasTimestamp !== undefined ? Boolean(hbConfig.hasTimestamp) : false;
+
+		const heartbeatConfig = {
+			enabled: hbConfig?.enabled ?? false,
+			interval: hbConfig?.interval ?? 30000,
+			timeout: hbConfig?.timeout ?? 5000,
+			ping,
+			pong,
+			hasTimestamp,
 		};
+		
 		this._heartbeatManager = new HeartbeatManager<T>(
 			heartbeatConfig,
-			socketConfig,
 			this._eventManager,
 			() => this._connection,
 			() => this.connectionState,
@@ -1259,8 +1449,10 @@ export default class TypeSocketClient<T extends TypeSocketConfig, const C extend
 					const payload = JSON.parse(message.data);
 					assertIsValidMessage<T>(payload);
 
-					if (this._socketConfig.heartbeat && payload.type === this._socketConfig.heartbeat.pong) {
-						this._heartbeatManager.handlePong(payload.data as PongPayload<T>);
+					// Check if this is a heartbeat pong message
+					const pongType = this._heartbeatManager['_config'].pong;
+					if (pongType && payload.type === pongType) {
+						this._heartbeatManager.handlePong(payload.data as PongPayload);
 						return;
 					}
 
